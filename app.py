@@ -94,22 +94,74 @@ def extract_hours_lines_from_text(text: str) -> List[str]:
 
 
 def judge_has_hours(lines: List[str]) -> bool:
-    """
-    O / X 판정
-    """
     if not lines:
         return False
 
-    text = "\n".join(lines)
+    text = "\n".join(lines).strip()
 
-    if any(k in text for k in ["영업시간", "브레이크타임", "라스트오더", "정기휴무", "점심시간"]):
-        return True
+    # 0) 먼저 제외해야 할 문구
+    invalid_keywords = [
+        "영업시간 수정",
+        "정보 수정",
+        "수정 제안",
+        "제안하기",
+        "정보 수정 제안",
+    ]
 
-    time_pattern = re.compile(
+    # 텍스트 전체가 수정 유도 문구 위주면 X
+    # 단, 실제 시간표현이 함께 있으면 아래 정규식에서 다시 O 처리됨
+    if any(k in text for k in invalid_keywords):
+        # 바로 False로 끝내지 않고, 실제 시간표현이 있는지 아래에서 다시 확인
+        pass
+
+    # 1) 일반 시간 패턴: 09:00 - 18:00 / 09:00~18:00 / 09:00 ∼ 18:00
+    time_range_pattern = re.compile(
         r"([01]?\d|2[0-3]):[0-5]\d\s*[-~∼]\s*([01]?\d|2[0-3]):[0-5]\d"
     )
-    return bool(time_pattern.search(text))
+    if time_range_pattern.search(text):
+        return True
 
+    # 2) 요일 + 시간 패턴
+    day_time_pattern = re.compile(
+        r"(월|화|수|목|금|토|일|매일).{0,15}([01]?\d|2[0-3]):[0-5]\d"
+    )
+    if day_time_pattern.search(text):
+        return True
+
+    # 3) 24시간 영업 / 24시간 운영 / 24시 영업
+    always_open_keywords = [
+        "24시간 영업",
+        "24시간 운영",
+        "24시 영업",
+        "연중무휴",
+        "매일 영업",
+        "상시영업",
+    ]
+    if any(k in text for k in always_open_keywords):
+        return True
+
+    # 4) 영업 중 + 영업 관련 문구
+    # 단독 "영업 중"만으로는 오탐 가능성이 조금 있지만,
+    # 실제 플레이스에서는 영업상태 노출일 가능성이 높아서 O로 처리
+    status_keywords = [
+        "영업 중",
+        "영업종료",
+        "곧 영업 시작",
+        "곧 마감",
+        "브레이크타임",
+        "라스트오더",
+        "정기휴무",
+        "휴게시간",
+        "점심시간",
+    ]
+    if any(k in text for k in status_keywords):
+        return True
+
+    # 5) 수정 제안류만 있고 실제 시간표현이 없으면 X
+    if any(k in text for k in invalid_keywords):
+        return False
+
+    return False
 
 def fetch_text_via_requests(url: str) -> str:
     """
