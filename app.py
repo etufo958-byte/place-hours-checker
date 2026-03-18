@@ -65,31 +65,50 @@ def extract_hours_lines_from_text(text: str) -> List[str]:
         "24시간 영업", "24시간 운영", "24시 영업",
         "연중무휴", "매일 영업",
         "영업 중", "영업종료", "곧 영업 시작", "곧 마감",
+        "영업 종료", "주문마감", "접수마감",
     ]
 
-    time_pattern = re.compile(
+    time_range_pattern = re.compile(
         r"([01]?\d|2[0-3]):[0-5]\d\s*[-~∼]\s*([01]?\d|2[0-3]):[0-5]\d"
+    )
+
+    close_or_lastorder_pattern = re.compile(
+        r"([01]?\d|2[0-3]):[0-5]\d\s*에\s*(영업\s*종료|라스트오더|주문마감|접수마감)"
     )
 
     result = []
     for i, line in enumerate(lines):
-        if any(k in line for k in keywords) or time_pattern.search(line):
+        matched = (
+            any(k in line for k in keywords)
+            or time_range_pattern.search(line)
+            or close_or_lastorder_pattern.search(line)
+        )
+
+        if matched:
             result.append(line)
 
-            # 앞뒤 줄도 일부 함께 저장
+            # 앞뒤 줄도 함께 보조 수집
             if i - 1 >= 0:
                 prev_line = lines[i - 1]
-                if prev_line not in result and (
-                    any(k in prev_line for k in keywords) or time_pattern.search(prev_line)
-                ):
-                    result.append(prev_line)
+                if prev_line not in result:
+                    prev_matched = (
+                        any(k in prev_line for k in keywords)
+                        or time_range_pattern.search(prev_line)
+                        or close_or_lastorder_pattern.search(prev_line)
+                    )
+                    if prev_matched:
+                        result.append(prev_line)
 
             if i + 1 < len(lines):
                 next_line = lines[i + 1]
-                if next_line not in result and (
-                    any(k in next_line for k in keywords) or time_pattern.search(next_line)
-                ):
-                    result.append(next_line)
+                if next_line not in result:
+                    next_matched = (
+                        any(k in next_line for k in keywords)
+                        or time_range_pattern.search(next_line)
+                        or close_or_lastorder_pattern.search(next_line)
+                    )
+                    if next_matched:
+                        result.append(next_line)
 
     dedup = []
     seen = set()
