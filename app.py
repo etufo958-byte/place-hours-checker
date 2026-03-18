@@ -7,13 +7,14 @@ import requests
 from bs4 import BeautifulSoup
 from fastapi import FastAPI
 from pydantic import BaseModel
-from playwright.sync_api import sync_playwright
 
 app = FastAPI(title="Naver Place Hours Checker")
 
 REQUEST_TIMEOUT = 20
 PER_ITEM_SLEEP_SEC = 1.0
-ENABLE_BROWSER_FALLBACK = True
+
+# 일단 안정화용으로 Playwright 끔
+ENABLE_BROWSER_FALLBACK = False
 
 HEADERS = {
     "User-Agent": (
@@ -54,6 +55,9 @@ def clean_text(text: str) -> str:
 
 
 def extract_hours_lines_from_text(text: str) -> List[str]:
+    """
+    텍스트 전체에서 영업시간 관련 줄만 추출
+    """
     text = clean_text(text)
     lines = [line.strip() for line in text.split("\n") if line.strip()]
 
@@ -63,7 +67,7 @@ def extract_hours_lines_from_text(text: str) -> List[str]:
     ]
 
     time_pattern = re.compile(
-        r"([01]?\d|2[0-3]):[0-5]\d\s*[-~]\s*([01]?\d|2[0-3]):[0-5]\d"
+        r"([01]?\d|2[0-3]):[0-5]\d\s*[-~∼]\s*([01]?\d|2[0-3]):[0-5]\d"
     )
 
     result = []
@@ -71,6 +75,7 @@ def extract_hours_lines_from_text(text: str) -> List[str]:
         if any(k in line for k in keywords) or time_pattern.search(line):
             result.append(line)
 
+            # 다음 줄도 이어서 가져오기
             if i + 1 < len(lines):
                 nxt = lines[i + 1]
                 if nxt not in result and (
@@ -89,30 +94,39 @@ def extract_hours_lines_from_text(text: str) -> List[str]:
 
 
 def judge_has_hours(lines: List[str]) -> bool:
+    """
+    O / X 판정
+    """
     if not lines:
         return False
 
     text = "\n".join(lines)
+
     if any(k in text for k in ["영업시간", "브레이크타임", "라스트오더", "정기휴무", "점심시간"]):
         return True
 
     time_pattern = re.compile(
-        r"([01]?\d|2[0-3]):[0-5]\d\s*[-~]\s*([01]?\d|2[0-3]):[0-5]\d"
+        r"([01]?\d|2[0-3]):[0-5]\d\s*[-~∼]\s*([01]?\d|2[0-3]):[0-5]\d"
     )
     return bool(time_pattern.search(text))
 
 
 def fetch_text_via_requests(url: str) -> str:
+    """
+    requests로 HTML 받아서 본문 텍스트 추출
+    인코딩 깨짐 보정 포함
+    """
     resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
     resp.raise_for_status()
 
-    # 핵심: 인코딩 강제 보정
+    # 인코딩 보정
     if not resp.encoding or resp.encoding.lower() in ["iso-8859-1", "ascii"]:
         resp.encoding = resp.apparent_encoding or "utf-8"
 
     html = resp.text
 
     soup = BeautifulSoup(html, "lxml")
+
     for tag in soup(["script", "style", "noscript"]):
         tag.extract()
 
@@ -120,82 +134,37 @@ def fetch_text_via_requests(url: str) -> str:
     return clean_text(text)
 
 
-def fetch_text_via_browser(page, url: str) -> str:
-    page.goto(url, wait_until="domcontentloaded", timeout=30000)
-    page.wait_for_timeout(2500)
-    text = page.locator("body").inner_text(timeout=10000)
-    return clean_text(text)
-
-
-def make_browser():
-    p = sync_playwright().start()
-    browser = p.chromium.launch(
-        headless=True,
-        args=[
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-gpu",
-            "--no-zygote",
-            "--single-process",
-        ],
-    )
-    return p, browser
-
-
-def check_one_mid(mid: str, store_name: Optional[str], page=None) -> Dict[str, Any]:
+def check_one_mid(mid: str, store_name: Optional[str]) -> Dict[str, Any]:
     candidates = url_candidates(mid)
     errors = []
 
     for url in candidates:
-        # 1차 requests
         try:
             text = fetch_text_via_requests(url)
             lines = extract_hours_lines_from_text(text)
             has_hours = judge_has_hours(lines)
 
-            if has_hours:
-                return {
-                    "mid": mid,
-                    "storeName": store_name or "",
-                    "hasHours": True,
-                    "rawText": "\n".join(lines),
-                    "status": "완료",
-                    "error": "",
-                    "sourceUrl": url,
-                    "checkedAt": now_str(),
-                    "sourceType": "requests",
-                }
+            return {
+                "mid": mid,
+                "storeName": store_name or "",
+                "hasHours": bool(has_hours),
+                "rawText": "\n".join(lines),
+                "status": "완료",
+                "error": "",
+                "sourceUrl": url,
+                "checkedAt": now_str(),
+                "sourceType": "requests",
+            }
         except Exception as e:
             errors.append(f"[requests] {url} -> {str(e)}")
 
-        # 2차 browser fallback
-        if ENABLE_BROWSER_FALLBACK and page is not None:
-            try:
-                text = fetch_text_via_browser(page, url)
-                lines = extract_hours_lines_from_text(text)
-                has_hours = judge_has_hours(lines)
-
-                return {
-                    "mid": mid,
-                    "storeName": store_name or "",
-                    "hasHours": bool(has_hours),
-                    "rawText": "\n".join(lines),
-                    "status": "완료" if has_hours else "완료",
-                    "error": "",
-                    "sourceUrl": url,
-                    "checkedAt": now_str(),
-                    "sourceType": "playwright",
-                }
-            except Exception as e:
-                errors.append(f"[browser] {url} -> {str(e)}")
-
+    # 여기서도 API 전체 실패로 만들지 않고 X로 반환
     return {
         "mid": mid,
         "storeName": store_name or "",
         "hasHours": False,
         "rawText": "",
-        "status": "실패",
+        "status": "완료",
         "error": " | ".join(errors)[:1000],
         "sourceUrl": "",
         "checkedAt": now_str(),
@@ -212,46 +181,37 @@ def health():
 def check_hours_batch(payload: BatchRequest):
     results = []
 
-    p = None
-    browser = None
-    context = None
-    page = None
-
     try:
-        if ENABLE_BROWSER_FALLBACK:
-            p, browser = make_browser()
-            context = browser.new_context(locale="ko-KR")
-            page = context.new_page()
-
         for item in payload.items:
-            result = check_one_mid(item.mid, item.storeName, page=page)
+            try:
+                result = check_one_mid(item.mid, item.storeName)
+            except Exception as e:
+                result = {
+                    "mid": item.mid,
+                    "storeName": item.storeName or "",
+                    "hasHours": False,
+                    "rawText": "",
+                    "status": "실패",
+                    "error": f"server item error: {str(e)}"[:1000],
+                    "sourceUrl": "",
+                    "checkedAt": now_str(),
+                    "sourceType": "",
+                }
+
             results.append(result)
             time.sleep(PER_ITEM_SLEEP_SEC)
 
-    finally:
-        try:
-            if page:
-                page.close()
-        except:
-            pass
-        try:
-            if context:
-                context.close()
-        except:
-            pass
-        try:
-            if browser:
-                browser.close()
-        except:
-            pass
-        try:
-            if p:
-                p.stop()
-        except:
-            pass
+        return {
+            "ok": True,
+            "count": len(results),
+            "results": results,
+        }
 
-    return {
-        "ok": True,
-        "count": len(results),
-        "results": results,
-    }
+    except Exception as e:
+        # 배치 전체가 죽어도 JSON으로 반환
+        return {
+            "ok": False,
+            "count": 0,
+            "results": [],
+            "error": f"batch error: {str(e)}"[:1000],
+        }
