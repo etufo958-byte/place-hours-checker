@@ -55,15 +55,16 @@ def clean_text(text: str) -> str:
 
 
 def extract_hours_lines_from_text(text: str) -> List[str]:
-    """
-    텍스트 전체에서 영업시간 관련 줄만 추출
-    """
     text = clean_text(text)
     lines = [line.strip() for line in text.split("\n") if line.strip()]
 
     keywords = [
         "영업시간", "브레이크타임", "라스트오더",
-        "정기휴무", "휴무", "점심시간", "월", "화", "수", "목", "금", "토", "일", "매일"
+        "정기휴무", "휴무", "점심시간", "휴게시간",
+        "월", "화", "수", "목", "금", "토", "일", "매일",
+        "24시간 영업", "24시간 운영", "24시 영업",
+        "연중무휴", "매일 영업",
+        "영업 중", "영업종료", "곧 영업 시작", "곧 마감",
     ]
 
     time_pattern = re.compile(
@@ -75,13 +76,20 @@ def extract_hours_lines_from_text(text: str) -> List[str]:
         if any(k in line for k in keywords) or time_pattern.search(line):
             result.append(line)
 
-            # 다음 줄도 이어서 가져오기
-            if i + 1 < len(lines):
-                nxt = lines[i + 1]
-                if nxt not in result and (
-                    any(k in nxt for k in keywords) or time_pattern.search(nxt)
+            # 앞뒤 줄도 일부 함께 저장
+            if i - 1 >= 0:
+                prev_line = lines[i - 1]
+                if prev_line not in result and (
+                    any(k in prev_line for k in keywords) or time_pattern.search(prev_line)
                 ):
-                    result.append(nxt)
+                    result.append(prev_line)
+
+            if i + 1 < len(lines):
+                next_line = lines[i + 1]
+                if next_line not in result and (
+                    any(k in next_line for k in keywords) or time_pattern.search(next_line)
+                ):
+                    result.append(next_line)
 
     dedup = []
     seen = set()
