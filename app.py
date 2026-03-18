@@ -107,7 +107,7 @@ def judge_has_hours(lines: List[str]) -> bool:
 
     text = "\n".join(lines).strip()
 
-    # 0) 먼저 제외해야 할 문구
+    # 제외 문구
     invalid_keywords = [
         "영업시간 수정",
         "정보 수정",
@@ -116,27 +116,21 @@ def judge_has_hours(lines: List[str]) -> bool:
         "정보 수정 제안",
     ]
 
-    # 텍스트 전체가 수정 유도 문구 위주면 X
-    # 단, 실제 시간표현이 함께 있으면 아래 정규식에서 다시 O 처리됨
-    if any(k in text for k in invalid_keywords):
-        # 바로 False로 끝내지 않고, 실제 시간표현이 있는지 아래에서 다시 확인
-        pass
-
-    # 1) 일반 시간 패턴: 09:00 - 18:00 / 09:00~18:00 / 09:00 ∼ 18:00
+    # 1. 일반 시간 범위: 09:00 - 18:00
     time_range_pattern = re.compile(
         r"([01]?\d|2[0-3]):[0-5]\d\s*[-~∼]\s*([01]?\d|2[0-3]):[0-5]\d"
     )
     if time_range_pattern.search(text):
         return True
 
-    # 2) 요일 + 시간 패턴
+    # 2. 요일 + 시간
     day_time_pattern = re.compile(
         r"(월|화|수|목|금|토|일|매일).{0,15}([01]?\d|2[0-3]):[0-5]\d"
     )
     if day_time_pattern.search(text):
         return True
 
-    # 3) 24시간 영업 / 24시간 운영 / 24시 영업
+    # 3. 24시간/상시 운영
     always_open_keywords = [
         "24시간 영업",
         "24시간 운영",
@@ -148,9 +142,14 @@ def judge_has_hours(lines: List[str]) -> bool:
     if any(k in text for k in always_open_keywords):
         return True
 
-    # 4) 영업 중 + 영업 관련 문구
-    # 단독 "영업 중"만으로는 오탐 가능성이 조금 있지만,
-    # 실제 플레이스에서는 영업상태 노출일 가능성이 높아서 O로 처리
+    # 4. 운영 상태 + 종료/라스트오더 시간
+    close_or_lastorder_pattern = re.compile(
+        r"([01]?\d|2[0-3]):[0-5]\d\s*에\s*(영업\s*종료|라스트오더|주문마감|접수마감)"
+    )
+    if close_or_lastorder_pattern.search(text):
+        return True
+
+    # 5. 영업 상태 문구 자체
     status_keywords = [
         "영업 중",
         "영업종료",
@@ -165,7 +164,7 @@ def judge_has_hours(lines: List[str]) -> bool:
     if any(k in text for k in status_keywords):
         return True
 
-    # 5) 수정 제안류만 있고 실제 시간표현이 없으면 X
+    # 6. 수정제안류만 있고 실제 시간/상태정보가 없으면 X
     if any(k in text for k in invalid_keywords):
         return False
 
